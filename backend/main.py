@@ -239,6 +239,24 @@ def run_query(body: QueryRequest):
     if body.db_name not in db_manager.get_connection_names():
         raise HTTPException(404, f"Database '{body.db_name}' not connected")
 
+    # Block write / change requests in plain English before calling the LLM
+    q = (body.question or "").lower()
+    write_verbs = [
+        "update ", "delete ", "remove ", "drop ", "insert ", "create ",
+        "alter ", "truncate ", "modify ", "edit ", "change ", "set ",
+        "add column", "rename ", "grant ", "revoke ",
+    ]
+    # short commands like "update users"
+    write_starts = ("update ", "delete ", "remove ", "drop ", "insert ", "create ", "alter ")
+    if any(q.strip().startswith(s) for s in write_starts) or any(v in q for v in write_verbs):
+        # Allow questions that only *ask about* updates, e.g. "how many users were updated"
+        ask_words = ("how many", "show", "list", "find", "get", "what", "which", "count", "select")
+        if not any(q.strip().startswith(a) for a in ask_words):
+            raise HTTPException(
+                status_code=400,
+                detail="This app can only show data (read-only). Update, delete, or other changes are not allowed.",
+            )
+
     meta = db_manager.connections_meta.get(body.db_name, {})
     dialect = meta.get("dialect", "sqlite")
     schema_text = db_manager.get_schema_text(body.db_name)
@@ -255,7 +273,8 @@ def run_query(body: QueryRequest):
         detail = sql_or_err or "Could not complete this request."
         if detail.startswith("-- ERROR"):
             detail = detail.replace("-- ERROR:", "").strip() or "Could not find this information in the selected database schema."
-        if "cannot answer" in detail.lower() or "available schema" in detail.lower():
+        low = detail.lower()
+        if "cannot answer" in low or "available schema" in low or "could not find" in low:
             detail = "Could not find this information in the selected database schema. Please try a different question."
         raise HTTPException(status_code=400, detail=detail)
 
