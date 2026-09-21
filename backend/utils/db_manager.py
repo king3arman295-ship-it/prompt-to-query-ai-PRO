@@ -293,65 +293,22 @@ class DatabaseManager:
         return schema_info
 
     def get_schema_text(self, name: str, max_tables: int = 50) -> str:
-        """Return a human/LLM-friendly textual representation of the schema.
-
-        Includes columns, PKs, FKs, and (when possible) a few distinct sample
-        values for low-cardinality columns so the LLM knows real status/type
-        values instead of guessing.
-        """
+        """Return a human/LLM-friendly textual representation of the schema."""
         schema = self.schemas.get(name) or self.scan_schema(name)
         if not schema or "tables" not in schema:
             return "No schema available."
 
-        dialect = schema.get("dialect", "unknown")
-        lines = [
-            f"Database: {name} (dialect: {dialect})",
-            f"Scanned at: {schema.get('scanned_at', 'N/A')}",
-            "",
-            "IMPORTANT RELATIONSHIPS:",
-            "  customers 1---* subscriptions *---1 plans",
-            "  customers 1---* devices",
-            "  customers 1---* watch_history *---1 content_catalog",
-            "  customers 1---* invoices 1---* payments",
-            "  customers 1---* support_tickets",
-            "  customers 1---* data_usage",
-            "  content_catalog 1---* series 1---* episodes  (for content_type='series')",
-            "",
-        ]
+        lines = [f"Database: {name} (dialect: {schema.get('dialect', 'unknown')})"]
+        lines.append(f"Scanned at: {schema.get('scanned_at', 'N/A')}")
+        lines.append("")
 
-        engine = self.get_engine(name)
         tables = list(schema["tables"].items())[:max_tables]
-
-        # Columns that benefit from sample values
-        sample_worthy = {
-            "status", "plan_type", "content_type", "genre", "device_type",
-            "category", "priority", "method", "segment", "quality",
-            "event_type", "severity", "language", "streaming_quality",
-            "is_active", "is_premium", "auto_renew", "is_registered",
-        }
-
         for tname, tinfo in tables:
             lines.append(f"TABLE: {tname}")
             for col in tinfo.get("columns", []):
                 pk = " [PK]" if col["name"] in tinfo.get("primary_keys", []) else ""
                 null = " NULL" if col.get("nullable") else " NOT NULL"
-                col_line = f"  - {col['name']}: {col['type']}{null}{pk}"
-
-                # Attach a few sample values when useful
-                if engine is not None and col["name"].lower() in sample_worthy:
-                    try:
-                        with engine.connect() as conn:
-                            q = text(
-                                f'SELECT DISTINCT "{col["name"]}" FROM "{tname}" '
-                                f'WHERE "{col["name"]}" IS NOT NULL LIMIT 12'
-                            )
-                            vals = [str(r[0]) for r in conn.execute(q).fetchall()]
-                        if vals:
-                            col_line += f"  -- e.g. {', '.join(vals[:8])}"
-                    except Exception:
-                        pass
-                lines.append(col_line)
-
+                lines.append(f"  - {col['name']}: {col['type']}{null}{pk}")
             for fk in tinfo.get("foreign_keys", []):
                 cols = ", ".join(fk.get("constrained_columns", []))
                 ref = f"{fk.get('referred_table')}({', '.join(fk.get('referred_columns', []))})"
@@ -387,11 +344,11 @@ class DatabaseManager:
 
         allowed_starts = ("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "PRAGMA")
         if not any(cleaned.startswith(s) for s in allowed_starts):
-            return False, "Only read-only queries (SELECT / WITH / SHOW / DESCRIBE / EXPLAIN) are allowed."
+            return False, "This app can only show data (read-only). Update, delete, or other changes are not allowed."
 
         # Block multiple statements
         if ";" in cleaned.rstrip(";"):
-            return False, "Multiple statements are not allowed."
+            return False, "This app can only show data (read-only). Update, delete, or other changes are not allowed."
 
         dangerous = [
             "INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ",
@@ -400,7 +357,7 @@ class DatabaseManager:
         ]
         for d in dangerous:
             if d in cleaned:
-                return False, f"Dangerous keyword detected: {d.strip()}"
+                return False, "This app can only show data (read-only). Update, delete, or other changes are not allowed."
 
         return True, "OK"
 

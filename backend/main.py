@@ -6,15 +6,12 @@ Proper REST API product for natural language → SQL
 from __future__ import annotations
 
 import io
-import math
 import os
 import sys
-from datetime import datetime, date
-from decimal import Decimal
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,16 +23,8 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-
 from utils.db_manager import DatabaseManager, DIALECT_CONFIG
 from utils.llm_client import LLMClient, DEFAULT_XAI_URL, DEFAULT_MODEL_XAI
-
-# Load environment variables from a local .env file (never committed, never
-# sent to the browser). This is where the real LLM API key lives now.
-# override=True ensures values in .env always win, even if a stale/empty
-# LLM_API_KEY happens to already be set in the shell environment.
-load_dotenv(ROOT.parent / ".env", override=True)
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -61,24 +50,12 @@ DATA_DIR = ROOT.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 db_manager = DatabaseManager(str(DATA_DIR / "connections.json"))
 
-# ---------------------------------------------------------------------------
-# LLM configuration
-# ---------------------------------------------------------------------------
-# The API key is read ONLY from the server-side .env file (see .env.example)
-# via environment variables. It is never accepted from the browser and never
-# returned in any API response, so end users of the app can't see or change
-# it. To change the key or provider, edit .env / these defaults in code and
-# restart the server.
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-20b")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-
+# Default LLM (can be changed via /api/llm/config)
 llm_client = LLMClient(
-    provider=LLM_PROVIDER,
-    base_url=LLM_BASE_URL,
-    model=LLM_MODEL,
-    api_key=LLM_API_KEY,
+    provider="openai",
+    base_url="https://api.groq.com/openai/v1",
+    model="openai/gpt-oss-20b",
+    api_key="",
 )
 
 
@@ -97,11 +74,10 @@ class ConnectionCreate(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    # NOTE: intentionally no api_key field here. The key is a server-side
-    # secret (see .env) and must never be accepted from a client request.
     provider: str = "openai"  # xai | ollama | openai
     base_url: str = "https://api.groq.com/openai/v1"
     model: str = "openai/gpt-oss-20b"
+    api_key: str = ""
 
 
 class QueryRequest(BaseModel):
@@ -116,61 +92,6 @@ class SQLExecuteRequest(BaseModel):
     db_name: str
     sql: str
     limit: int = 500
-
-
-# ---------------------------------------------------------------------------
-# JSON-safety helpers
-# ---------------------------------------------------------------------------
-# SQL NULLs become NaN/NaT in pandas, and Python's strict JSON encoder
-# (used by FastAPI's default JSONResponse) rejects NaN/Infinity outright,
-# crashing the whole endpoint with a 500. This converts DataFrame rows into
-# plain JSON-safe values (NaN/NaT -> null, numpy scalars -> native types,
-# timestamps -> ISO strings, bytes -> text) before they're returned.
-def _json_safe_value(v: Any) -> Any:
-    if v is None:
-        return None
-    if isinstance(v, (list, dict)):
-        return v
-    if isinstance(v, str):
-        return v
-    # Catch NaN / NaT / pandas-NA before any type-specific formatting below,
-    # so a missing timestamp (NaT) doesn't get str()'d into the text "NaT".
-    try:
-        if pd.isna(v):
-            return None
-    except (TypeError, ValueError):
-        pass
-    if isinstance(v, (np.integer,)):
-        return int(v)
-    if isinstance(v, (np.floating,)):
-        f = float(v)
-        return None if (math.isnan(f) or math.isinf(f)) else f
-    if isinstance(v, np.bool_):
-        return bool(v)
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, float):
-        return None if (math.isnan(v) or math.isinf(v)) else v
-    if isinstance(v, (pd.Timestamp, datetime, date)):
-        try:
-            return v.isoformat()
-        except Exception:
-            return str(v)
-    if isinstance(v, (bytes, bytearray)):
-        try:
-            return v.decode("utf-8")
-        except Exception:
-            return v.hex()
-    if isinstance(v, Decimal):
-        return float(v)
-    return v
-
-
-def df_to_json_safe_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    return [
-        {k: _json_safe_value(v) for k, v in row.items()}
-        for row in df.to_dict(orient="records")
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -196,32 +117,26 @@ def info():
 # ---------------------------------------------------------------------------
 @app.post("/api/llm/config")
 def set_llm_config(cfg: LLMConfig):
-    """Allows changing provider/base_url/model at runtime (useful for
-    switching to local Ollama, etc.) but the API key always comes from the
-    server's own environment (.env) — a client can never set or read it."""
     global llm_client
     llm_client = LLMClient(
         provider=cfg.provider,
         base_url=cfg.base_url,
         model=cfg.model,
-        api_key=LLM_API_KEY,
+        api_key=cfg.api_key,
     )
     ok, msg = llm_client.is_available()
-    return {"success": ok, "message": msg, "config": cfg.dict()}
+    return {"success": ok, "message": msg, "config": cfg.dict(exclude={"api_key"})}
 
 
 @app.get("/api/llm/status")
 def llm_status():
     ok, msg = llm_client.is_available()
-    key = llm_client.api_key
     return {
         "available": ok,
         "message": msg,
         "provider": llm_client.provider,
         "model": llm_client.model,
         "base_url": llm_client.base_url,
-        "api_key_configured": bool(key),
-        "api_key_length": len(key),
     }
 
 
@@ -336,7 +251,13 @@ def run_query(body: QueryRequest):
         extra_instructions=body.extra_instructions,
     )
     if not ok:
-        raise HTTPException(status_code=400, detail=sql_or_err)
+        # User-friendly message for schema / generation failures
+        detail = sql_or_err or "Could not complete this request."
+        if detail.startswith("-- ERROR"):
+            detail = detail.replace("-- ERROR:", "").strip() or "Could not find this information in the selected database schema."
+        if "cannot answer" in detail.lower() or "available schema" in detail.lower():
+            detail = "Could not find this information in the selected database schema. Please try a different question."
+        raise HTTPException(status_code=400, detail=detail)
 
     result = {
         "success": True,
@@ -355,7 +276,7 @@ def run_query(body: QueryRequest):
         )
         if not success:
             raise HTTPException(status_code=400, detail=msg)
-        result["rows"] = df_to_json_safe_records(df)
+        result["rows"] = df.to_dict(orient="records")
         result["columns"] = list(df.columns)
         result["row_count"] = len(df)
         result["message"] = msg
@@ -377,7 +298,7 @@ def execute_sql(body: SQLExecuteRequest):
     return {
         "success": True,
         "sql": body.sql,
-        "rows": df_to_json_safe_records(df),
+        "rows": df.to_dict(orient="records"),
         "columns": list(df.columns),
         "row_count": len(df),
         "message": msg,

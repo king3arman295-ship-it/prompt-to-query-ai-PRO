@@ -2,7 +2,7 @@
 LLM Client – supports:
   1. Local Ollama
   2. xAI / Grok API  (recommended – fast)
-  3. Any OpenAI-compatible endpoint (OpenAI, Groq, Gemini OpenAI-compat, Together, etc.)
+  3. Any OpenAI-compatible endpoint (OpenAI, Groq, Together, etc.)
 """
 
 from __future__ import annotations
@@ -19,84 +19,19 @@ DEFAULT_MODEL_OLLAMA = "qwen2.5:3b"
 DEFAULT_MODEL_XAI = "grok-3"          # or grok-2, grok-3-mini etc.
 
 
-SYSTEM_PROMPT = """You are an expert SQL query generator specialized in telecom BSS and streaming/OTT platforms.
+SYSTEM_PROMPT = """You are an expert SQL query generator. Your only job is to convert a natural language question into a correct, efficient, read-only SQL query.
 
-Your ONLY job is to convert a natural language question into a correct, efficient, read-only SQL query.
-
-STRICT RULES:
-1. Output ONLY the SQL query. No explanations, no markdown fences, no comments, no preamble.
-2. Use ONLY tables and columns that appear in the provided schema. Never invent columns or tables.
+Rules:
+1. Output ONLY the SQL query. No explanations, no markdown fences, no comments unless necessary.
+2. Use ONLY the tables and columns that appear in the provided schema.
 3. Prefer explicit column lists over SELECT *.
-4. Use correct dialect syntax for the target database (especially date functions).
-5. If the question cannot be answered from the schema, respond with exactly:
-   -- ERROR: Cannot answer from available schema
-6. NEVER generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE or any write/DDL operation.
-7. Add a reasonable LIMIT (e.g. 50 or 100) when the user asks for "list", "show all", "top" without a clear bound. For pure aggregates (COUNT, SUM, AVG) do not add LIMIT.
-8. Use proper JOINs when data spans multiple tables. Prefer INNER JOIN unless LEFT is needed for "never did X" / anti-join patterns.
-9. For date filtering:
-   - SQLite: date('now'), datetime('now'), date(column), strftime('%Y-%m', column)
-   - Prefer comparing date columns with date literals 'YYYY-MM-DD'
+4. Always use the correct dialect syntax for the target database.
+5. If the question cannot be answered from the schema, respond with exactly: -- ERROR: Could not find this information in the selected database schema
+6. Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE or any write operation.
+7. Add reasonable LIMIT (e.g. 100) if the user asks for "all" or "list" without a clear bound.
+8. Use proper JOINs when data spans multiple tables. Prefer INNER JOIN unless LEFT is needed.
+9. For date filtering use the dialect's date functions.
 10. Quote identifiers only when necessary (reserved words or mixed case).
-11. For "last N days / months" use relative date expressions appropriate to the dialect.
-12. When counting distinct entities after a join, use COUNT(DISTINCT id_column).
-13. Status / type columns are usually lowercase strings (e.g. 'active', 'paid', 'success', 'open').
-14. Boolean-like flags are often INTEGER 0/1 (is_active, auto_renew, is_premium, is_registered).
-
-DOMAIN HINTS (telecom + streaming):
-- customers ↔ subscriptions ↔ plans
-- customers ↔ devices
-- customers ↔ watch_history ↔ content_catalog
-- customers ↔ invoices ↔ payments
-- customers ↔ support_tickets
-- customers ↔ data_usage
-- series / episodes link to content_catalog for series-type content
-- "active subscribers" usually means subscriptions.status = 'active'
-- "churned" / "cancelled" → status IN ('cancelled','expired')
-- "ARPU" / revenue → SUM of invoice or payment amounts (usually successful/paid)
-- "most watched" → GROUP BY content, ORDER BY COUNT(*) or SUM(watch_seconds)
-- "data usage" is in MB in data_usage.data_mb
-- plan_type values: mobile_prepaid, mobile_postpaid, broadband, streaming_only, bundle
-
-FEW-SHOT EXAMPLES (follow this style closely):
-
-Question: How many active customers do we have?
-SQL: SELECT COUNT(*) AS active_customers FROM customers WHERE is_active = 1;
-
-Question: Show the top 10 most watched titles by number of views.
-SQL: SELECT c.title, c.content_type, COUNT(*) AS view_count
-FROM watch_history w
-JOIN content_catalog c ON c.content_id = w.content_id
-GROUP BY c.content_id, c.title, c.content_type
-ORDER BY view_count DESC
-LIMIT 10;
-
-Question: How many active subscriptions are on broadband plans?
-SQL: SELECT COUNT(*) AS active_broadband_subs
-FROM subscriptions s
-JOIN plans p ON p.plan_id = s.plan_id
-WHERE s.status = 'active' AND p.plan_type = 'broadband';
-
-Question: List customers who have never placed a support ticket.
-SQL: SELECT c.customer_id, c.full_name, c.email
-FROM customers c
-LEFT JOIN support_tickets t ON t.customer_id = c.customer_id
-WHERE t.ticket_id IS NULL
-LIMIT 100;
-
-Question: Total successful payment amount in the last 90 days.
-SQL: SELECT ROUND(SUM(amount), 2) AS total_paid
-FROM payments
-WHERE status = 'success'
-  AND payment_date >= date('now', '-90 days');
-
-Question: Which cities have the most active subscribers?
-SQL: SELECT c.city, COUNT(DISTINCT s.customer_id) AS active_subscribers
-FROM customers c
-JOIN subscriptions s ON s.customer_id = c.customer_id
-WHERE s.status = 'active'
-GROUP BY c.city
-ORDER BY active_subscribers DESC
-LIMIT 20;
 """
 
 
@@ -106,17 +41,15 @@ def build_prompt(
     dialect: str = "sqlite",
     extra_instructions: str = "",
 ) -> str:
-    extra = ""
-    if extra_instructions.strip():
-        extra = f"\nAdditional instructions from user:\n{extra_instructions.strip()}\n"
-
     return f"""{SYSTEM_PROMPT}
 
 Target SQL dialect: {dialect.upper()}
 
 Database schema:
 {schema_text}
-{extra}
+
+{extra_instructions}
+
 User question:
 {question}
 
@@ -166,8 +99,10 @@ class LLMClient:
             return False, "API key is missing"
         try:
             headers = {"Authorization": f"Bearer {self.api_key}"}
+            # Most providers have /models
             r = requests.get(f"{self.base_url}/models", headers=headers, timeout=8)
             if r.status_code in (200, 401, 403):
+                # 401/403 still means the endpoint is reachable
                 return True, f"API endpoint reachable ({self.provider})"
             return False, f"API returned {r.status_code}"
         except Exception as e:
@@ -179,7 +114,7 @@ class LLMClient:
     def generate(
         self,
         prompt: str,
-        temperature: float = 0.05,
+        temperature: float = 0.1,
         max_tokens: int = 1024,
     ) -> Tuple[bool, str]:
         if self.provider == "ollama":
@@ -215,18 +150,10 @@ class LLMClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        # Put the full system rules in the system message for better compliance
         payload = {
             "model": self.model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert SQL generator for telecom and streaming databases. "
-                        "Output ONLY pure SQL. No markdown, no explanation. "
-                        "Never produce write/DDL statements."
-                    ),
-                },
+                {"role": "system", "content": "You are an expert SQL generator. Output only pure SQL."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": temperature,
@@ -289,8 +216,6 @@ class LLMClient:
             if upper.startswith(("SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "PRAGMA")):
                 start_idx = i
                 break
-            if upper.startswith("-- ERROR"):
-                return line.strip()
         text = "\n".join(lines[start_idx:]).strip()
 
         if ";" in text:

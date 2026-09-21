@@ -164,84 +164,38 @@ function collectDBForm() {
 }
 
 // ---------- LLM ----------
-// The API key lives only on the server (.env) — the frontend never sees or
-// sends it. This just shows a read-only status for the currently
-// configured provider/model.
-async function loadLLMStatus() {
-  const el = $("llm-status-display");
+async function saveLLM() {
+  const body = {
+    provider: $("llm-provider").value,
+    base_url: $("llm-url").value.trim().replace(/\/$/, ""),
+    model: $("llm-model").value.trim(),
+    api_key: $("llm-key").value.trim(),
+  };
+  $("llm-status").textContent = "Checking...";
+  $("llm-status").className = "status";
   try {
-    const res = await api("/api/llm/status");
-    const keyInfo = res.api_key_configured ? `key loaded (${res.api_key_length} chars)` : "⚠️ no key loaded";
-    el.textContent = `${res.provider} / ${res.model} — ${keyInfo} — ${res.message}`;
-    el.className = "status " + (res.available && res.api_key_configured ? "ok" : "err");
+    const res = await api("/api/llm/config", { method: "POST", body: JSON.stringify(body) });
+    $("llm-status").textContent = res.message;
+    $("llm-status").className = "status " + (res.success ? "ok" : "err");
   } catch (e) {
-    el.textContent = e.message;
-    el.className = "status err";
+    $("llm-status").textContent = e.message;
+    $("llm-status").className = "status err";
   }
 }
 
-// ---------- Progress loader ----------
-const STEPS = ["validate", "generate", "execute", "format"];
-
-function resetProgress() {
-  STEPS.forEach((s) => {
-    const el = $("step-" + s);
-    if (!el) return;
-    el.classList.remove("active", "done", "error");
-    const icon = el.querySelector(".step-icon");
-    if (icon) icon.textContent = String(STEPS.indexOf(s) + 1);
-    const detail = $("detail-" + s);
-    if (detail) detail.textContent = "";
-  });
-  const bar = $("progress-bar");
-  if (bar) {
-    bar.style.width = "0%";
-    bar.classList.remove("indeterminate");
+$("llm-provider").addEventListener("change", (e) => {
+  const p = e.target.value;
+  if (p === "xai") {
+    $("llm-url").value = "https://api.x.ai/v1";
+    $("llm-model").value = "grok-3";
+  } else if (p === "ollama") {
+    $("llm-url").value = "http://localhost:11434";
+    $("llm-model").value = "qwen2.5:3b";
+  } else {
+    $("llm-url").value = "https://api.groq.com/openai/v1";
+    $("llm-model").value = "openai/gpt-oss-20b";
   }
-}
-
-function setStep(name, state, detailText) {
-  // state: 'active' | 'done' | 'error'
-  const idx = STEPS.indexOf(name);
-  STEPS.forEach((s, i) => {
-    const el = $("step-" + s);
-    if (!el) return;
-    el.classList.remove("active", "done", "error");
-    const icon = el.querySelector(".step-icon");
-    if (i < idx) {
-      el.classList.add("done");
-      if (icon) icon.textContent = "✓";
-    } else if (i === idx) {
-      el.classList.add(state);
-      if (icon) {
-        if (state === "done") icon.textContent = "✓";
-        else if (state === "error") icon.textContent = "!";
-        else icon.textContent = String(i + 1);
-      }
-    } else {
-      if (icon) icon.textContent = String(i + 1);
-    }
-  });
-  const detail = $("detail-" + name);
-  if (detail && detailText) detail.textContent = "— " + detailText;
-
-  const bar = $("progress-bar");
-  if (bar) {
-    const pct = state === "done" && name === "format" ? 100 : Math.round(((idx + (state === "done" ? 1 : 0.45)) / STEPS.length) * 100);
-    bar.style.width = Math.min(pct, 100) + "%";
-    bar.classList.toggle("indeterminate", state === "active");
-  }
-}
-
-function setButtonsBusy(busy) {
-  const run = $("btn-run");
-  const sqlOnly = $("btn-sql-only");
-  if (run) {
-    run.disabled = busy;
-    run.textContent = busy ? "Working..." : "Generate & Run";
-  }
-  if (sqlOnly) sqlOnly.disabled = busy;
-}
+});
 
 // ---------- Query ----------
 async function runQuery() {
@@ -251,17 +205,10 @@ async function runQuery() {
 
   hide($("error-box"));
   hide($("result-box"));
-  hide($("sql-box"));
-  show($("progress-box"));
-  resetProgress();
-  setButtonsBusy(true);
+  show($("sql-box"));
+  $("generated-sql").value = "Generating SQL with AI...";
 
   try {
-    setStep("validate", "active", "checking connection & question");
-    await new Promise((r) => setTimeout(r, 280));
-    setStep("validate", "done", "ok");
-
-    setStep("generate", "active", "calling LLM...");
     const res = await api("/api/query", {
       method: "POST",
       body: JSON.stringify({
@@ -271,35 +218,13 @@ async function runQuery() {
         execute: true,
       }),
     });
-
-    setStep("generate", "done", "SQL ready");
     lastSQL = res.sql;
     $("generated-sql").value = res.sql;
-    show($("sql-box"));
-
-    setStep("execute", "active", "running on " + currentDB);
-    await new Promise((r) => setTimeout(r, 200));
-    setStep("execute", "done", (res.row_count != null ? res.row_count + " rows" : "done"));
-
-    setStep("format", "active", "building table");
     renderResults(res);
-    setStep("format", "done", "complete");
     addToHistory(question, res.sql, res.row_count);
-
-    setTimeout(() => hide($("progress-box")), 900);
   } catch (e) {
-    // Mark the current active step as error
-    const active = document.querySelector(".progress-step.active");
-    if (active) {
-      const step = active.getAttribute("data-step");
-      setStep(step, "error", "failed");
-    } else {
-      setStep("generate", "error", "failed");
-    }
     $("generated-sql").value = "";
     showError(e.message);
-  } finally {
-    setButtonsBusy(false);
   }
 }
 
@@ -309,35 +234,18 @@ async function generateOnly() {
   if (!question) return alert("Enter a question");
 
   hide($("error-box"));
-  hide($("result-box"));
-  show($("progress-box"));
-  resetProgress();
-  setButtonsBusy(true);
+  show($("sql-box"));
+  $("generated-sql").value = "Generating...";
 
   try {
-    setStep("validate", "active", "checking request");
-    await new Promise((r) => setTimeout(r, 200));
-    setStep("validate", "done", "ok");
-
-    setStep("generate", "active", "calling LLM...");
     const res = await api("/api/query", {
       method: "POST",
       body: JSON.stringify({ db_name: currentDB, question, execute: false }),
     });
-    setStep("generate", "done", "SQL ready");
-    // Skip execute/format for SQL-only
-    setStep("execute", "done", "skipped");
-    setStep("format", "done", "skipped");
-
     lastSQL = res.sql;
     $("generated-sql").value = res.sql;
-    show($("sql-box"));
-    setTimeout(() => hide($("progress-box")), 700);
   } catch (e) {
-    setStep("generate", "error", "failed");
     showError(e.message);
-  } finally {
-    setButtonsBusy(false);
   }
 }
 
@@ -345,18 +253,8 @@ async function executeSQL() {
   if (!currentDB) return;
   const sql = $("generated-sql").value.trim();
   if (!sql) return;
-
   hide($("error-box"));
-  hide($("result-box"));
-  show($("progress-box"));
-  resetProgress();
-  setButtonsBusy(true);
-
   try {
-    setStep("validate", "done", "manual SQL");
-    setStep("generate", "done", "using edited SQL");
-    setStep("execute", "active", "running on " + currentDB);
-
     const res = await api("/api/execute", {
       method: "POST",
       body: JSON.stringify({
@@ -365,18 +263,11 @@ async function executeSQL() {
         limit: parseInt($("row-limit").value) || 200,
       }),
     });
-    setStep("execute", "done", (res.row_count != null ? res.row_count + " rows" : "done"));
-    setStep("format", "active", "building table");
     lastSQL = sql;
     renderResults(res);
-    setStep("format", "done", "complete");
     addToHistory("(manual SQL)", sql, res.row_count);
-    setTimeout(() => hide($("progress-box")), 800);
   } catch (e) {
-    setStep("execute", "error", "failed");
     showError(e.message);
-  } finally {
-    setButtonsBusy(false);
   }
 }
 
@@ -403,10 +294,74 @@ function escapeHtml(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+function friendlyError(msg) {
+  const m = (msg || "").toString().toLowerCase();
+
+  // Write / policy blocked
+  if (
+    m.includes("only read-only") ||
+    m.includes("dangerous keyword") ||
+    m.includes("insert") ||
+    m.includes("update") ||
+    m.includes("delete") ||
+    m.includes("drop") ||
+    m.includes("truncate") ||
+    m.includes("alter") ||
+    m.includes("multiple statements")
+  ) {
+    return "This app can only show data (read-only). Update, delete, or other changes are not allowed.";
+  }
+
+  // Cannot answer from schema / LLM said ERROR
+  if (
+    m.includes("cannot answer") ||
+    m.includes("from available schema") ||
+    m.includes("-- error") ||
+    m.includes("could not find") ||
+    m.includes("no such table") ||
+    m.includes("does not exist")
+  ) {
+    return "Could not find this information in the selected database schema. Please try a different question.";
+  }
+
+  // Rate limit / API issues
+  if (m.includes("rate limit") || m.includes("too many requests") || m.includes("429")) {
+    return "The AI is busy right now. Please wait a few seconds and try again.";
+  }
+
+  // Timeout / network
+  if (m.includes("timeout") || m.includes("timed out") || m.includes("network") || m.includes("failed to fetch")) {
+    return "The request took too long or lost connection. Please try again.";
+  }
+
+  // Connection problems
+  if (m.includes("connection") || m.includes("connect") || m.includes("refused") || m.includes("not connected")) {
+    return "Could not connect to the database. Please check the connection and try again.";
+  }
+
+  // Generic API / LLM failure
+  if (m.includes("api error") || m.includes("llm error") || m.includes("500") || m.includes("internal")) {
+    return "Something went wrong while generating the answer. Please try again.";
+  }
+
+  // Fallback – keep short and clear
+  if (!msg || msg.length > 180) {
+    return "Could not complete this request. Please try a simpler question.";
+  }
+
+  return msg;
+}
+
 function showError(msg) {
   const box = $("error-box");
-  box.textContent = msg;
+  const friendly = friendlyError(msg);
+  box.innerHTML = "⚠️ " + escapeHtml(friendly);
   show(box);
+  // Clear stuck "Generating..." state
+  if ($("generated-sql") && $("generated-sql").value.toLowerCase().includes("generating")) {
+    $("generated-sql").value = "";
+    hide($("sql-box"));
+  }
 }
 
 // ---------- Downloads ----------
@@ -529,7 +484,7 @@ async function loadSchema() {
       const pks = info.primary_keys || [];
       return `
         <details style="margin-bottom:0.6rem">
-          <summary style="cursor:pointer;font-weight:500">${name} <span class="muted">(${cols.length} cols)</span></summary>
+          <summary style="cursor:pointer;font-weight:500">📋 ${name} <span class="muted">(${cols.length} cols)</span></summary>
           <table style="margin-top:0.5rem">
             <thead><tr><th>Column</th><th>Type</th><th>Nullable</th><th>PK</th></tr></thead>
             <tbody>
@@ -538,7 +493,7 @@ async function loadSchema() {
                   <td>${c.name}</td>
                   <td>${c.type}</td>
                   <td>${c.nullable ? "Yes" : "No"}</td>
-                  <td>${pks.includes(c.name) ? "Yes" : ""}</td>
+                  <td>${pks.includes(c.name) ? "🔑" : ""}</td>
                 </tr>
               `).join("")}
             </tbody>
@@ -560,4 +515,3 @@ async function loadSchema() {
 
 // ---------- Init ----------
 refreshConnections();
-loadLLMStatus();
