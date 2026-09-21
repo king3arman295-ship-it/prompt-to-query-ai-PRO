@@ -50,12 +50,12 @@ DATA_DIR = ROOT.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 db_manager = DatabaseManager(str(DATA_DIR / "connections.json"))
 
-# Default LLM (can be changed via /api/llm/config)
+# Default LLM – load from Railway / environment variables if set
 llm_client = LLMClient(
-    provider="openai",
-    base_url="https://api.groq.com/openai/v1",
-    model="openai/gpt-oss-20b",
-    api_key="",
+    provider=os.getenv("LLM_PROVIDER", "openai"),
+    base_url=os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1"),
+    model=os.getenv("LLM_MODEL", "openai/gpt-oss-20b"),
+    api_key=os.getenv("LLM_API_KEY", ""),
 )
 
 
