@@ -164,38 +164,98 @@ function collectDBForm() {
 }
 
 // ---------- LLM ----------
-async function saveLLM() {
-  const body = {
-    provider: $("llm-provider").value,
-    base_url: $("llm-url").value.trim().replace(/\/$/, ""),
-    model: $("llm-model").value.trim(),
-    api_key: $("llm-key").value.trim(),
-  };
-  $("llm-status").textContent = "Checking...";
-  $("llm-status").className = "status";
+async function checkLLMStatus() {
+  const el = $("llm-status");
+  if (!el) return;
+  el.textContent = "Checking...";
+  el.className = "status";
   try {
-    const res = await api("/api/llm/config", { method: "POST", body: JSON.stringify(body) });
-    $("llm-status").textContent = res.message;
-    $("llm-status").className = "status " + (res.success ? "ok" : "err");
+    const res = await api("/api/llm/status");
+    if (res.available) {
+      el.textContent = "● Connected — ready";
+      el.className = "status ok";
+    } else {
+      el.textContent = res.message || "Not connected";
+      el.className = "status err";
+    }
   } catch (e) {
-    $("llm-status").textContent = e.message;
-    $("llm-status").className = "status err";
+    el.textContent = "Could not reach LLM";
+    el.className = "status err";
   }
 }
 
-$("llm-provider").addEventListener("change", (e) => {
-  const p = e.target.value;
-  if (p === "xai") {
-    $("llm-url").value = "https://api.x.ai/v1";
-    $("llm-model").value = "grok-3";
-  } else if (p === "ollama") {
-    $("llm-url").value = "http://localhost:11434";
-    $("llm-model").value = "qwen2.5:3b";
-  } else {
-    $("llm-url").value = "https://api.groq.com/openai/v1";
-    $("llm-model").value = "openai/gpt-oss-20b";
+async function saveLLM() {
+  const body = {
+    provider: $("llm-provider") ? $("llm-provider").value : "openai",
+    base_url: $("llm-url") ? $("llm-url").value.trim().replace(/\/$/, "") : "",
+    model: $("llm-model") ? $("llm-model").value.trim() : "",
+    api_key: $("llm-key") ? $("llm-key").value.trim() : "",
+  };
+  const el = $("llm-status");
+  if (el) {
+    el.textContent = "Checking...";
+    el.className = "status";
   }
-});
+  try {
+    const res = await api("/api/llm/config", { method: "POST", body: JSON.stringify(body) });
+    if (el) {
+      el.textContent = res.success ? "● Connected — ready" : (res.message || "Failed");
+      el.className = "status " + (res.success ? "ok" : "err");
+    }
+  } catch (e) {
+    if (el) {
+      el.textContent = e.message;
+      el.className = "status err";
+    }
+  }
+}
+
+if ($("llm-provider")) {
+  $("llm-provider").addEventListener("change", (e) => {
+    const p = e.target.value;
+    if (p === "xai") {
+      if ($("llm-url")) $("llm-url").value = "https://api.x.ai/v1";
+      if ($("llm-model")) $("llm-model").value = "grok-3";
+    } else if (p === "ollama") {
+      if ($("llm-url")) $("llm-url").value = "http://localhost:11434";
+      if ($("llm-model")) $("llm-model").value = "qwen2.5:3b";
+    } else {
+      if ($("llm-url")) $("llm-url").value = "https://api.groq.com/openai/v1";
+      if ($("llm-model")) $("llm-model").value = "openai/gpt-oss-20b";
+    }
+  });
+}
+
+// Status stages while AI is working
+let statusTimer = null;
+function startStatusStages(execute) {
+  const stages = execute
+    ? [
+        "1/4 Understanding your question...",
+        "2/4 Reading database schema...",
+        "3/4 Generating SQL...",
+        "4/4 Running query on database...",
+      ]
+    : [
+        "1/3 Understanding your question...",
+        "2/3 Reading database schema...",
+        "3/3 Generating SQL...",
+      ];
+  let i = 0;
+  if ($("generated-sql")) $("generated-sql").value = stages[0];
+  statusTimer = setInterval(() => {
+    i++;
+    if (i < stages.length && $("generated-sql")) {
+      $("generated-sql").value = stages[i];
+    }
+  }, 900);
+}
+function stopStatusStages() {
+  if (statusTimer) {
+    clearInterval(statusTimer);
+    statusTimer = null;
+  }
+}
 
 // ---------- Query ----------
 async function runQuery() {
@@ -206,7 +266,7 @@ async function runQuery() {
   hide($("error-box"));
   hide($("result-box"));
   show($("sql-box"));
-  $("generated-sql").value = "Generating SQL with AI...";
+  startStatusStages(true);
 
   try {
     const res = await api("/api/query", {
@@ -218,11 +278,13 @@ async function runQuery() {
         execute: true,
       }),
     });
+    stopStatusStages();
     lastSQL = res.sql;
     $("generated-sql").value = res.sql;
     renderResults(res);
     addToHistory(question, res.sql, res.row_count);
   } catch (e) {
+    stopStatusStages();
     $("generated-sql").value = "";
     showError(e.message);
   }
@@ -235,16 +297,19 @@ async function generateOnly() {
 
   hide($("error-box"));
   show($("sql-box"));
-  $("generated-sql").value = "Generating...";
+  startStatusStages(false);
 
   try {
     const res = await api("/api/query", {
       method: "POST",
       body: JSON.stringify({ db_name: currentDB, question, execute: false }),
     });
+    stopStatusStages();
     lastSQL = res.sql;
     $("generated-sql").value = res.sql;
   } catch (e) {
+    stopStatusStages();
+    $("generated-sql").value = "";
     showError(e.message);
   }
 }
@@ -515,3 +580,4 @@ async function loadSchema() {
 
 // ---------- Init ----------
 refreshConnections();
+checkLLMStatus();
