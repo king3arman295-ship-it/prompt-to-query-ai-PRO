@@ -5,47 +5,56 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI DB Query Assistant</title>
   <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="app">
     <!-- ========== SIDEBAR ========== -->
     <aside class="sidebar">
       <div class="brand">
-        <div class="logo">AQ</div>
+        <div class="logo">🧠</div>
         <div>
           <h1>AI DB Query</h1>
-          <p class="subtitle">Natural language to SQL</p>
+          <p class="subtitle">Natural Language → SQL</p>
         </div>
       </div>
 
+      <!-- Connections -->
       <section class="panel">
         <div class="panel-header">
           <h2>Databases</h2>
           <button class="icon-btn" onclick="refreshConnections()" title="Refresh list">↻</button>
         </div>
         <div id="connection-list" class="connection-list">
-          <p class="muted" style="color:#94a3b8">No databases yet.</p>
+          <p class="muted">No databases yet.</p>
         </div>
         <button class="btn btn-primary full" onclick="openModal('add-db-modal')">+ Add Database</button>
       </section>
 
+      <!-- Selected DB actions -->
       <section class="panel" id="selected-actions" style="display:none">
-        <h2>Selected connection</h2>
-        <button class="btn btn-outline full" onclick="refreshSchema()">Refresh schema</button>
-        <button class="btn btn-ghost full" onclick="showTab('schema')">View schema</button>
-        <button class="btn btn-ghost full danger" onclick="deleteCurrentDB()">Remove connection</button>
+        <h2>Selected DB Actions</h2>
+        <button class="btn btn-outline full" onclick="refreshSchema()">🔄 Refresh Schema</button>
+        <button class="btn btn-ghost full" onclick="showTab('schema')">🗂️ View Schema</button>
+        <button class="btn btn-ghost full danger" onclick="deleteCurrentDB()">🗑️ Remove Connection</button>
       </section>
 
+      <!-- LLM -->
       <section class="panel">
-        <h2>LLM provider</h2>
-        <p class="muted" style="font-size:0.78rem;color:#94a3b8">
-          API key is configured on the server only.
-        </p>
-        <div id="llm-status-display" class="status">Checking...</div>
+        <h2>LLM Provider</h2>
+        <p class="muted" style="font-size:0.78rem;margin-bottom:0.4rem">API key is configured on the server only.</p>
+        <p id="llm-status" class="status">Checking...</p>
+        <!-- hidden fields kept for optional manual override -->
+        <div class="hidden">
+          <select id="llm-provider"><option value="openai">openai</option></select>
+          <input id="llm-key" type="password" />
+          <input id="llm-url" type="text" />
+          <input id="llm-model" type="text" />
+        </div>
       </section>
 
       <div class="sidebar-footer">
-        <a href="/docs" target="_blank">API Docs</a>
+        <a href="/docs" target="_blank">API Docs ↗</a>
         <button class="link-btn" onclick="showTab('help')">Help</button>
       </div>
     </aside>
@@ -58,10 +67,10 @@
           <p id="current-db-meta" class="muted"></p>
         </div>
         <nav class="tabs-nav">
-          <button class="tab-btn active" data-tab="query" onclick="showTab('query')">Query</button>
-          <button class="tab-btn" data-tab="schema" onclick="showTab('schema')">Schema</button>
-          <button class="tab-btn" data-tab="history" onclick="showTab('history')">History</button>
-          <button class="tab-btn" data-tab="help" onclick="showTab('help')">Help</button>
+          <button class="tab-btn active" data-tab="query" onclick="showTab('query')">💬 Query</button>
+          <button class="tab-btn" data-tab="schema" onclick="showTab('schema')">🗂️ Schema</button>
+          <button class="tab-btn" data-tab="history" onclick="showTab('history')">📜 History</button>
+          <button class="tab-btn" data-tab="help" onclick="showTab('help')">❓ Help</button>
         </nav>
       </header>
 
@@ -69,61 +78,41 @@
       <section id="tab-query" class="tab active">
         <div class="card">
           <h3>Ask in plain English</h3>
-          <textarea id="question" rows="3" placeholder="Examples:&#10;• How many active broadband subscriptions do we have?&#10;• Top 10 most watched titles&#10;• Total successful payments in the last 90 days"></textarea>
+          <textarea id="question" rows="3" placeholder="Examples:&#10;• Show the last 15 doctors ordered by created_at&#10;• How many patients registered this month?&#10;• List top 10 products by revenue"></textarea>
           <div class="row between">
             <div class="row">
               <label class="inline">Max rows
-                <input type="number" id="row-limit" value="200" min="10" max="5000">
+                <input type="number" id="row-limit" value="200" min="10" max="5000" style="width:80px">
               </label>
             </div>
             <div class="row">
-              <button class="btn btn-outline" id="btn-sql-only" onclick="generateOnly()">SQL only</button>
-              <button class="btn btn-primary" id="btn-run" onclick="runQuery()">Generate &amp; Run</button>
+              <button class="btn btn-outline" onclick="generateOnly()">✨ SQL Only</button>
+              <button class="btn btn-primary" onclick="runQuery()">🚀 Generate & Run</button>
             </div>
-          </div>
-        </div>
-
-        <!-- Multi-step progress -->
-        <div id="progress-box" class="query-progress hidden">
-          <h3>Processing query</h3>
-          <div class="progress-steps">
-            <div class="progress-step" id="step-validate" data-step="validate">
-              <div class="step-icon">1</div>
-              <div class="step-label">Validating request <span class="step-detail" id="detail-validate"></span></div>
-            </div>
-            <div class="progress-step" id="step-generate" data-step="generate">
-              <div class="step-icon">2</div>
-              <div class="step-label">Generating SQL with AI <span class="step-detail" id="detail-generate"></span></div>
-            </div>
-            <div class="progress-step" id="step-execute" data-step="execute">
-              <div class="step-icon">3</div>
-              <div class="step-label">Executing against database <span class="step-detail" id="detail-execute"></span></div>
-            </div>
-            <div class="progress-step" id="step-format" data-step="format">
-              <div class="step-icon">4</div>
-              <div class="step-label">Formatting results <span class="step-detail" id="detail-format"></span></div>
-            </div>
-          </div>
-          <div class="progress-bar-track">
-            <div class="progress-bar-fill" id="progress-bar"></div>
           </div>
         </div>
 
         <div id="sql-box" class="card hidden">
           <div class="card-header">
             <h3>Generated SQL</h3>
-            <button class="btn btn-sm btn-outline" onclick="executeSQL()">Execute</button>
+            <button class="btn btn-sm btn-outline" onclick="executeSQL()">▶️ Execute</button>
           </div>
-          <textarea id="generated-sql" rows="5"></textarea>
+          <div id="query-stages" class="query-stages hidden">
+            <div class="stage" data-stage="1"><span class="dot"></span><span class="label">Understanding</span></div>
+            <div class="stage" data-stage="2"><span class="dot"></span><span class="label">Reading schema</span></div>
+            <div class="stage" data-stage="3"><span class="dot"></span><span class="label">Generating SQL</span></div>
+            <div class="stage" data-stage="4"><span class="dot"></span><span class="label">Running query</span></div>
+          </div>
+          <textarea id="generated-sql" rows="5" placeholder="SQL will appear here..."></textarea>
         </div>
 
         <div id="result-box" class="card hidden">
           <div class="card-header">
             <h3>Results <span id="row-count" class="badge">0</span></h3>
             <div class="download-group">
-              <button class="btn btn-sm btn-outline" onclick="downloadCSV()">CSV</button>
-              <button class="btn btn-sm btn-outline" onclick="downloadExcel()">Excel</button>
-              <button class="btn btn-sm btn-outline" onclick="downloadSQL()">SQL</button>
+              <button class="btn btn-sm" onclick="downloadCSV()">⬇️ CSV</button>
+              <button class="btn btn-sm" onclick="downloadExcel()">⬇️ Excel</button>
+              <button class="btn btn-sm" onclick="downloadSQL()">⬇️ SQL</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -138,8 +127,8 @@
       <section id="tab-schema" class="tab">
         <div class="card">
           <div class="card-header">
-            <h3>Schema explorer</h3>
-            <button class="btn btn-sm btn-outline" onclick="refreshSchema()">Refresh</button>
+            <h3>Schema Explorer</h3>
+            <button class="btn btn-sm btn-outline" onclick="refreshSchema()">🔄 Refresh</button>
           </div>
           <div id="db-details" class="db-details hidden"></div>
           <div id="schema-content">
@@ -152,8 +141,8 @@
       <section id="tab-history" class="tab">
         <div class="card">
           <div class="card-header">
-            <h3>Query history</h3>
-            <button class="btn btn-sm btn-outline" onclick="clearHistory()">Clear</button>
+            <h3>Query History</h3>
+            <button class="btn btn-sm btn-ghost" onclick="clearHistory()">Clear</button>
           </div>
           <div id="history-list">
             <p class="muted">No queries yet. Run something on the Query tab.</p>
@@ -164,33 +153,33 @@
       <!-- ===== HELP TAB ===== -->
       <section id="tab-help" class="tab">
         <div class="card help-card">
-          <h3>How to use</h3>
+          <h3>How to use this product</h3>
           <ol>
-            <li><strong>Add a database</strong> from the sidebar.</li>
-            <li>Click <strong>Save &amp; Scan</strong> so the system reads tables, columns, and relationships.</li>
+            <li><strong>Add a database</strong> using the sidebar (+ Add Database).</li>
+            <li>Click <strong>Save & Scan</strong> — the system reads all tables, columns, PKs and FKs.</li>
             <li>Select the database, then ask questions in plain English.</li>
-            <li>Review the generated SQL, edit if needed, and download results as CSV / Excel.</li>
+            <li>Edit the generated SQL if needed, then download results as CSV / Excel / SQL.</li>
           </ol>
 
           <h4>Recommended LLM settings</h4>
           <table class="help-table">
             <tr><th>Provider</th><th>Base URL</th><th>Model</th></tr>
-            <tr><td>Groq</td><td>https://api.groq.com/openai/v1</td><td>openai/gpt-oss-20b</td></tr>
-            <tr><td>Gemini</td><td>https://generativelanguage.googleapis.com/v1beta/openai</td><td>gemini-2.0-flash</td></tr>
-            <tr><td>xAI</td><td>https://api.x.ai/v1</td><td>grok-3</td></tr>
+            <tr><td>Groq (fast)</td><td>https://api.groq.com/openai/v1</td><td>openai/gpt-oss-20b</td></tr>
+            <tr><td>Gemini (free)</td><td>https://generativelanguage.googleapis.com/v1beta/openai</td><td>gemini-2.0-flash</td></tr>
+            <tr><td>DeepSeek</td><td>https://api.deepseek.com</td><td>deepseek-v4-flash</td></tr>
             <tr><td>Ollama</td><td>http://localhost:11434</td><td>qwen2.5:3b</td></tr>
           </table>
 
-          <h4>Example questions (telecom / streaming)</h4>
+          <h4>Example questions</h4>
           <ul>
-            <li>How many active broadband subscriptions do we have?</li>
-            <li>Top 10 most watched titles by number of views</li>
-            <li>Total successful payments in the last 90 days</li>
-            <li>Customers who have never watched any content</li>
+            <li>Show the last 15 doctors ordered by created_at</li>
+            <li>How many patients registered in the last 30 days?</li>
+            <li>List top 10 products by total revenue with category</li>
+            <li>Find all active users from Pakistan</li>
           </ul>
 
-          <h4>API</h4>
-          <p>Interactive docs: <a href="/docs" target="_blank">/docs</a></p>
+          <h4>API for developers</h4>
+          <p>Full interactive docs available at <a href="/docs" target="_blank">/docs</a> (Swagger UI).</p>
         </div>
       </section>
     </main>
@@ -200,10 +189,10 @@
   <div id="add-db-modal" class="modal hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Add database</h3>
-        <button class="icon-btn" onclick="closeModal('add-db-modal')" style="color:#64748b">✕</button>
+        <h3>Add Database</h3>
+        <button class="icon-btn" onclick="closeModal('add-db-modal')">✕</button>
       </div>
-      <label>Connection name *<input id="db-name" placeholder="e.g. telecom_prod" /></label>
+      <label>Connection Name *<input id="db-name" placeholder="e.g. production_crm" /></label>
       <label>Type
         <select id="db-dialect" onchange="onDialectChange()">
           <option value="postgresql">PostgreSQL</option>
@@ -213,17 +202,19 @@
         </select>
       </label>
 
+      <!-- SQLite only -->
       <div id="sqlite-fields" class="hidden">
-        <label>SQLite file path *<input id="db-sqlite-path" placeholder="C:\data\mydb.db or /home/user/data.db" /></label>
-        <p class="muted" style="font-size:0.75rem;margin-top:-0.35rem">Local file path only.</p>
+        <label>SQLite File Path *<input id="db-sqlite-path" placeholder="C:\data\mydb.db or /home/user/data.db" /></label>
+        <p class="muted" style="font-size:0.75rem;margin-top:-0.4rem">For local file only. For remote use PostgreSQL/MySQL.</p>
       </div>
 
+      <!-- Server DBs (Postgres / MySQL / MSSQL) -->
       <div id="server-fields">
         <div class="grid-2">
-          <label>Host * <input id="db-host" value="localhost" /></label>
+          <label>Host * <input id="db-host" value="localhost" placeholder="localhost or db.example.com or IP" /></label>
           <label>Port * <input id="db-port" type="number" value="5432" /></label>
         </div>
-        <label>Database name * <input id="db-database" placeholder="e.g. clinic_db" /></label>
+        <label>Database Name * <input id="db-database" placeholder="e.g. clinic_db" /></label>
         <div class="grid-2">
           <label>Username <input id="db-user" placeholder="postgres / root / sa" /></label>
           <label>Password <input id="db-password" type="password" /></label>
@@ -232,8 +223,8 @@
 
       <label>Description <input id="db-desc" placeholder="optional" /></label>
       <div class="row" style="margin-top:1rem">
-        <button class="btn btn-outline" onclick="testDB()">Test connection</button>
-        <button class="btn btn-primary" onclick="saveDB()">Save &amp; scan</button>
+        <button class="btn btn-outline" onclick="testDB()">🧪 Test</button>
+        <button class="btn btn-primary" onclick="saveDB()">💾 Save & Scan</button>
       </div>
       <p id="db-msg" class="status"></p>
     </div>

@@ -226,34 +226,46 @@ if ($("llm-provider")) {
   });
 }
 
-// Status stages while AI is working
+// Visual status stages while AI is working
 let statusTimer = null;
+function setStageUI(activeIndex, maxStages) {
+  const wrap = $("query-stages");
+  if (!wrap) return;
+  show(wrap);
+  const nodes = wrap.querySelectorAll(".stage");
+  nodes.forEach((node, idx) => {
+    const n = idx + 1;
+    node.classList.remove("active", "done");
+    if (n < activeIndex) node.classList.add("done");
+    else if (n === activeIndex) node.classList.add("active");
+    node.style.display = (!maxStages || n <= maxStages) ? "" : "none";
+  });
+}
 function startStatusStages(execute) {
-  const stages = execute
-    ? [
-        "1/4 Understanding your question...",
-        "2/4 Reading database schema...",
-        "3/4 Generating SQL...",
-        "4/4 Running query on database...",
-      ]
-    : [
-        "1/3 Understanding your question...",
-        "2/3 Reading database schema...",
-        "3/3 Generating SQL...",
-      ];
-  let i = 0;
-  if ($("generated-sql")) $("generated-sql").value = stages[0];
+  const maxStages = execute ? 4 : 3;
+  let i = 1;
+  if ($("generated-sql")) $("generated-sql").value = "";
+  setStageUI(1, maxStages);
   statusTimer = setInterval(() => {
     i++;
-    if (i < stages.length && $("generated-sql")) {
-      $("generated-sql").value = stages[i];
-    }
-  }, 900);
+    if (i <= maxStages) setStageUI(i, maxStages);
+  }, 850);
 }
-function stopStatusStages() {
+function stopStatusStages(success) {
   if (statusTimer) {
     clearInterval(statusTimer);
     statusTimer = null;
+  }
+  const wrap = $("query-stages");
+  if (!wrap) return;
+  if (success) {
+    wrap.querySelectorAll(".stage").forEach((node) => {
+      node.classList.remove("active");
+      node.classList.add("done");
+    });
+    setTimeout(() => hide(wrap), 700);
+  } else {
+    hide(wrap);
   }
 }
 
@@ -278,13 +290,13 @@ async function runQuery() {
         execute: true,
       }),
     });
-    stopStatusStages();
+    stopStatusStages(true);
     lastSQL = res.sql;
     $("generated-sql").value = res.sql;
     renderResults(res);
     addToHistory(question, res.sql, res.row_count);
   } catch (e) {
-    stopStatusStages();
+    stopStatusStages(false);
     $("generated-sql").value = "";
     showError(e.message);
   }
@@ -304,11 +316,11 @@ async function generateOnly() {
       method: "POST",
       body: JSON.stringify({ db_name: currentDB, question, execute: false }),
     });
-    stopStatusStages();
+    stopStatusStages(true);
     lastSQL = res.sql;
     $("generated-sql").value = res.sql;
   } catch (e) {
-    stopStatusStages();
+    stopStatusStages(false);
     $("generated-sql").value = "";
     showError(e.message);
   }
