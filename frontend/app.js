@@ -172,7 +172,7 @@ async function checkLLMStatus() {
   try {
     const res = await api("/api/llm/status");
     if (res.available) {
-      el.textContent = "● Connected — ready";
+      el.textContent = "● Connected";
       el.className = "status ok";
     } else {
       el.textContent = res.message || "Not connected";

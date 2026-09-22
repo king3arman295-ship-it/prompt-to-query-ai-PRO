@@ -12,10 +12,10 @@
     <!-- ========== SIDEBAR ========== -->
     <aside class="sidebar">
       <div class="brand">
-        <div class="logo">🧠</div>
+        <div class="logo">AQ</div>
         <div>
           <h1>AI DB Query</h1>
-          <p class="subtitle">Natural Language → SQL</p>
+          <p class="subtitle">Natural language to SQL</p>
         </div>
       </div>
 
@@ -33,10 +33,10 @@
 
       <!-- Selected DB actions -->
       <section class="panel" id="selected-actions" style="display:none">
-        <h2>Selected DB Actions</h2>
-        <button class="btn btn-outline full" onclick="refreshSchema()">🔄 Refresh Schema</button>
-        <button class="btn btn-ghost full" onclick="showTab('schema')">🗂️ View Schema</button>
-        <button class="btn btn-ghost full danger" onclick="deleteCurrentDB()">🗑️ Remove Connection</button>
+        <h2>Selected connection</h2>
+        <button class="btn btn-outline full" onclick="refreshSchema()">Refresh schema</button>
+        <button class="btn btn-ghost full" onclick="showTab('schema')">View schema</button>
+        <button class="btn btn-ghost full danger" onclick="deleteCurrentDB()">Remove connection</button>
       </section>
 
       <!-- LLM -->
@@ -86,8 +86,8 @@
               </label>
             </div>
             <div class="row">
-              <button class="btn btn-outline" onclick="generateOnly()">✨ SQL Only</button>
-              <button class="btn btn-primary" onclick="runQuery()">🚀 Generate & Run</button>
+              <button class="btn btn-outline" onclick="generateOnly()">SQL only</button>
+              <button class="btn btn-primary" onclick="runQuery()">Generate & Run</button>
             </div>
           </div>
         </div>
